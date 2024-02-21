@@ -1,25 +1,21 @@
 import json
 import os
-import bcrypt
-from flask import Blueprint, Response, request, jsonify
+from werkzeug.security import generate_password_hash, check_password_hash
+from flask import Blueprint, Response, request
 import jwt
 from src import db
 from src.models.usuario_model import Usuario
-from datetime import datetime
-from flask_bcrypt import Bcrypt
+from datetime import datetime, timedelta
+secret_key = os.getenv('SECRET_KEY')
 
 usuarios_blueprint = Blueprint('usuarios_blueprint', __name__)
 
-@usuarios_blueprint.route('/signup', methods = ["POST"])
-def handle_login():
-    try: 
-        # first check user parameters
+@usuarios_blueprint.route('/signup', methods=["POST"])
+def handle_signup():
+    try:
         data = request.json
-        if "email" and "password" in data:
-            # check db for user records
-            user = Usuario.query.filter_by(email = data["email"]).first()
-
-            # if user records exists we will check user password
+        if "email" in data and "password" in data:
+            user = Usuario.query.filter_by(email=data["email"]).first()
             if user:
                 return Response(
                     response=json.dumps({'status': "failed", "message": "User Record already exists, kindly sign in"}),
@@ -27,18 +23,22 @@ def handle_login():
                     mimetype='application/json'
                 )
             else:
-                # hash user password
-                hashed_password = bcrypt.hashpw(data["password"].encode('utf-8'), bcrypt.gensalt())
+                hashed_password = generate_password_hash(data["password"])
                 new_user = Usuario(
                     email=data['email'],
                     name=data.get('name', ''),
-                    password=hashed_password,
-                    #created_at=datetime.now()
+                    password=hashed_password
                 )
                 db.session.add(new_user)
                 db.session.commit()
+
+                token = jwt.encode({
+                    'user_id': new_user.id, 
+                    'exp': datetime.utcnow() + timedelta(hours=24)
+                }, secret_key, algorithm='HS256')
+
                 return Response(
-                    response=json.dumps({'status': "success", "message": "User Record Created Successfully"}),
+                    response=json.dumps({'status': "success", "message": "User Record Created Successfully", "token": token}),
                     status=201,
                     mimetype='application/json'
                 )
@@ -50,37 +50,32 @@ def handle_login():
             )
     except Exception as e:
         return Response(
-                response=json.dumps({'status': "failed", 
-                                    "message": "Error Occured",
-                                    "error": str(e)}),
-                status=500,
-                mimetype='application/json'
-            )
-        
-@usuarios_blueprint.route('/signin', methods = ["POST"])
-def handle_signup():
+            response=json.dumps({'status': "failed", "message": "Error Occurred", "error": str(e)}),
+            status=500,
+            mimetype='application/json'
+        )
+
+@usuarios_blueprint.route('/signin', methods=["POST"])
+def handle_login():
     try:
         data = request.json
-        if "email" and "password" in data:
-            user = Usuario.query.filter_by(email = data["email"]).first()
-            if user:
-                if bcrypt.checkpw(data["password"].encode('utf-8'), user.password):
-                    token = jwt.encode({'email': user.email, 'exp': datetime.utcnow() + datetime.timedelta(minutes=30)}, os.getenv('SECRET_KEY'))
-                    return Response(
-                        response=json.dumps({'status': "success", "message": "User Logged In Successfully", "token": token}),
-                        status=200,
-                        mimetype='application/json'
-                    )
-                else:
-                    return Response(
-                        response=json.dumps({'status': "failed", "message": "Invalid User Credentials"}),
-                        status=401,
-                        mimetype='application/json'
-                    )
+        if "email" in data and "password" in data:
+            user = Usuario.query.filter_by(email=data["email"]).first()
+            if user and check_password_hash(user.password, data["password"]):
+                token = jwt.encode({
+                    'user_id': user.id, 
+                    'exp': datetime.utcnow() + timedelta(hours=24)
+                }, secret_key, algorithm='HS256')
+
+                return Response(
+                    response=json.dumps({'status': "success", "message": "User Logged in Successfully", "token": token}),
+                    status=200,
+                    mimetype='application/json'
+                )
             else:
                 return Response(
-                    response=json.dumps({'status': "failed", "message": "User Record does not exists, kindly sign up"}),
-                    status=404,
+                    response=json.dumps({'status': "failed", "message": "Invalid Email or Password"}),
+                    status=401,
                     mimetype='application/json'
                 )
         else:
@@ -91,74 +86,7 @@ def handle_signup():
             )
     except Exception as e:
         return Response(
-                response=json.dumps({'status': "failed", 
-                                    "message": "Error Occured",
-                                    "error": str(e)}),
-                status=500,
-                mimetype='application/json'
-            )
-        
-@usuarios_blueprint.route('/<int:id>', methods = ["GET"])
-def get_usuario(id):
-    try:
-        user = Usuario.query.get_or_404(id)
-        return jsonify(user.to_json())
-    except Exception as e:
-        return Response(
-                response=json.dumps({'status': "failed", 
-                                    "message": "Error Occured",
-                                    "error": str(e)}),
-                status=500,
-                mimetype='application/json'
-            )
-        
-@usuarios_blueprint.route('/<int:id>', methods = ["PUT"])
-def update_usuario(id):
-    try:
-        user = Usuario.query.get_or_404(id)
-        data = request.json
-        user.name = data['name']
-        user.email = data['email']
-        user.password = bcrypt.hashpw(data['password'].encode('utf-8'), bcrypt.gensalt())
-        db.session.commit()
-        return jsonify({'message': 'Usuario atualizado com sucesso!'})
-    except Exception as e:
-        return Response(
-                response=json.dumps({'status': "failed", 
-                                    "message": "Error Occured",
-                                    "error": str(e)}),
-                status=500,
-                mimetype='application/json'
-            )
-        
-@usuarios_blueprint.route('/<int:id>', methods = ["DELETE"])
-def delete_usuario(id):
-    try:
-        user = Usuario.query.get_or_404(id)
-        db.session.delete(user)
-        db.session.commit()
-        return jsonify({'message': 'Usuario deletado com sucesso!'})
-    except Exception as e:
-        return Response(
-                response=json.dumps({'status': "failed", 
-                                    "message": "Error Occured",
-                                    "error": str(e)}),
-                status=500,
-                mimetype='application/json'
-            )
-        
-@usuarios_blueprint.route('/usuarios', methods = ["GET"])
-def get_usuarios():
-    try:
-        all_users = Usuario.query.all()
-        return jsonify([user.to_json() for user in all_users])
-    except Exception as e:
-        return Response(
-                response=json.dumps({'status': "failed", 
-                                    "message": "Error Occured",
-                                    "error": str(e)}),
-                status=500,
-                mimetype='application/json'
-            )
-        
-        
+            response=json.dumps({'status': "failed", "message": "Error Occurred", "error": str(e)}),
+            status=500,
+            mimetype='application/json'
+        )
